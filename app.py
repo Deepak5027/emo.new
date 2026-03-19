@@ -635,7 +635,18 @@ elif view == "Add Journal Entry":
                  'Random Thoughts', 'Significant Event']
             )
 
-        save_btn = st.button("💾 Save Entry", use_container_width=True)
+        btn_col1, btn_col2 = st.columns([1, 1])
+        with btn_col1:
+            save_btn = st.button("💾 Save Entry", use_container_width=True)
+        with btn_col2:
+            analyse_btn = st.button("🔍 Analyse Now", use_container_width=True)
+
+        if analyse_btn:
+            if not entry_text.strip() or len(entry_text.strip()) < 3:
+                st.error("Please write something before analysing.")
+            else:
+                st.session_state["force_analyse"] = True
+                st.session_state["analyse_text"]  = entry_text
 
     # ── RIGHT PANEL: live prediction ──
     with right_col:
@@ -648,13 +659,17 @@ elif view == "Add Journal Entry":
 
         mood_map = {'Very Low': -0.4, 'Low': -0.15, 'Neutral': 0.0, 'Good': 0.15, 'Excellent': 0.4}
 
-        if entry_text and len(entry_text.strip()) >= 3:
-            live_emos      = detect_emotions(entry_text)
+        # Use either live text or the text captured at Analyse Now click
+        analyse_text = st.session_state.get("analyse_text", "") if st.session_state.get("force_analyse") else ""
+        display_text = entry_text if (entry_text and len(entry_text.strip()) >= 3) else analyse_text
+        if display_text and len(display_text.strip()) >= 3:
+            entry_text_for_analysis = display_text
+            live_emos      = detect_emotions(entry_text_for_analysis)
             live_prim      = primary_emotion(live_emos)
-            live_sent      = calculate_sentiment(entry_text)
-            live_intensity = calculate_intensity(entry_text, live_emos)
-            live_triggers  = find_trigger_words(entry_text)
-            live_words     = len(entry_text.split())
+            live_sent      = calculate_sentiment(entry_text_for_analysis)
+            live_intensity = calculate_intensity(entry_text_for_analysis, live_emos)
+            live_triggers  = find_trigger_words(entry_text_for_analysis)
+            live_words     = len(entry_text_for_analysis.split())
 
             live_sent = round(max(-1, min(1, live_sent + mood_map[manual_mood] * 0.3)), 3)
 

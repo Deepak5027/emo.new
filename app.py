@@ -549,6 +549,7 @@ if view == "Overview":
         st.plotly_chart(fig4, use_container_width=True, config={'displayModeBar': False})
 
 
+
 # ━━━━━━━━━━━━━━━━━━━ VIEW: ADD JOURNAL ENTRY ━━━━━━━━━━━━━━━━━━━
 elif view == "Add Journal Entry":
     st.markdown("<div class='section-title'>✍️ Add a New Journal Entry</div>", unsafe_allow_html=True)
@@ -556,87 +557,251 @@ elif view == "Add Journal Entry":
     if use_sample:
         st.info("ℹ️ Sample data mode is ON. Disable it in the sidebar to save your own entries.")
 
-    with st.container():
-        st.markdown("""
-        <div style='background:#1c1c32;border:1px solid #2e2e50;border-radius:16px;padding:1.5rem;margin-bottom:1.2rem;'>
-            <p style='color:#7878a0;font-size:0.85rem;margin:0;'>
-            Write freely — your emotions are detected automatically using keyword analysis. 
-            All data stays in your current session only.
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
+    # ── helpers for live analysis ──
+    def find_trigger_words(text):
+        text_lower = text.lower()
+        found = {}
+        for emotion, keywords in EMOTION_KEYWORDS.items():
+            matched = [kw for kw in keywords if kw in text_lower]
+            if matched:
+                found[emotion] = matched
+        return found
+
+    def sentiment_bar_html(score):
+        pct   = int((score + 1) / 2 * 100)
+        color = '#6bcb77' if score > 0.1 else '#ff6b6b' if score < -0.1 else '#ffd93d'
+        label = 'Positive' if score > 0.1 else 'Negative' if score < -0.1 else 'Neutral'
+        return (
+            "<div style='margin:0.3rem 0 0.6rem;'>"
+            "<div style='display:flex;justify-content:space-between;margin-bottom:4px;'>"
+            f"<span style='font-size:0.75rem;color:#7878a0;'>Sentiment</span>"
+            f"<span style='font-size:0.75rem;color:{color};font-weight:700;'>{label} ({score:+.2f})</span>"
+            "</div>"
+            "<div style='background:#12122a;border-radius:20px;height:8px;overflow:hidden;'>"
+            f"<div style='width:{pct}%;height:100%;background:{color};border-radius:20px;'></div>"
+            "</div></div>"
+        )
+
+    def intensity_bar_html(intensity):
+        color = '#ff6b6b' if intensity > 72 else '#ffd93d' if intensity > 50 else '#6bcb77'
+        return (
+            "<div style='margin:0.3rem 0 0.6rem;'>"
+            "<div style='display:flex;justify-content:space-between;margin-bottom:4px;'>"
+            f"<span style='font-size:0.75rem;color:#7878a0;'>Emotional Intensity</span>"
+            f"<span style='font-size:0.75rem;color:{color};font-weight:700;'>{intensity:.1f}%</span>"
+            "</div>"
+            "<div style='background:#12122a;border-radius:20px;height:8px;overflow:hidden;'>"
+            f"<div style='width:{intensity:.0f}%;height:100%;background:{color};border-radius:20px;'></div>"
+            "</div></div>"
+        )
+
+    # ── Layout: left = input | right = live panel ──
+    left_col, right_col = st.columns([3, 2], gap="large")
+
+    with left_col:
+        st.markdown(
+            "<div style='background:#1c1c32;border:1px solid #2e2e50;border-radius:14px;"
+            "padding:1rem 1.2rem;margin-bottom:1rem;'>"
+            "<p style='color:#7878a0;font-size:0.82rem;margin:0;line-height:1.6;'>"
+            "&#10024; <b style='color:#c8c8e0;'>Live Analysis</b> &mdash; emotions, sentiment &amp; intensity are "
+            "detected automatically as you type. The right panel updates instantly."
+            "</p></div>",
+            unsafe_allow_html=True
+        )
 
         entry_date = st.date_input("📅 Entry Date", value=datetime.today())
+
         entry_text = st.text_area(
-            "📝 Journal Entry",
-            placeholder="Write about your day, how you're feeling, what happened... There's no right or wrong way to journal.",
-            height=200,
+            "📝 What's on your mind?",
+            placeholder=(
+                "Start writing... e.g. 'I felt really anxious today about my exams. "
+                "But after a walk I felt calmer and grateful for small things.'"
+            ),
+            height=220,
             key="journal_text_input"
         )
 
         col_a, col_b = st.columns([1, 1])
         with col_a:
             manual_mood = st.select_slider(
-                "😶 Self-rated Mood (optional override)",
+                "😶 Self-rated Mood",
                 options=['Very Low', 'Low', 'Neutral', 'Good', 'Excellent'],
                 value='Neutral'
             )
         with col_b:
             writing_context = st.selectbox(
                 "🏷️ Context",
-                ['Morning Reflection', 'Evening Check-in', 'Therapy Notes', 'Random Thoughts', 'Significant Event']
+                ['Morning Reflection', 'Evening Check-in', 'Therapy Notes',
+                 'Random Thoughts', 'Significant Event']
             )
 
-        if st.button("💾 Save Journal Entry", use_container_width=False):
-            if not entry_text.strip():
-                st.error("Please write something before saving.")
-            elif len(entry_text.strip()) < 10:
-                st.error("Entry is too short. Write at least a sentence.")
-            else:
-                detected_emos = detect_emotions(entry_text)
-                prim_emo     = primary_emotion(detected_emos)
-                sentiment    = calculate_sentiment(entry_text)
-                intensity    = calculate_intensity(entry_text, detected_emos)
+        save_btn = st.button("💾 Save Entry", use_container_width=True)
 
-                # mood override influence
-                mood_map = {'Very Low': -0.4, 'Low': -0.15, 'Neutral': 0.0, 'Good': 0.15, 'Excellent': 0.4}
-                sentiment = round(max(-1, min(1, sentiment + mood_map[manual_mood] * 0.3)), 3)
+    # ── RIGHT PANEL: live prediction ──
+    with right_col:
+        st.markdown(
+            "<div style='font-size:0.72rem;color:#5a5a80;text-transform:uppercase;"
+            "letter-spacing:0.12em;margin-bottom:0.8rem;margin-top:0.1rem;'>"
+            "⚡ Live Sentiment Analysis</div>",
+            unsafe_allow_html=True
+        )
 
-                new_entry = {
-                    'date':               pd.Timestamp(entry_date),
-                    'text':               entry_text.strip(),
-                    'emotions':           detected_emos,
-                    'primary_emotion':    prim_emo,
-                    'sentiment_score':    sentiment,
-                    'emotional_intensity': intensity,
-                    'word_count':         len(entry_text.split()),
-                    'mood_stability':     round(random.uniform(40, 95), 1),
-                    'context':            writing_context,
-                    'manual_mood':        manual_mood,
-                }
+        mood_map = {'Very Low': -0.4, 'Low': -0.15, 'Neutral': 0.0, 'Good': 0.15, 'Excellent': 0.4}
 
-                st.session_state.journal_entries.append(new_entry)
+        if entry_text and len(entry_text.strip()) >= 3:
+            live_emos      = detect_emotions(entry_text)
+            live_prim      = primary_emotion(live_emos)
+            live_sent      = calculate_sentiment(entry_text)
+            live_intensity = calculate_intensity(entry_text, live_emos)
+            live_triggers  = find_trigger_words(entry_text)
+            live_words     = len(entry_text.split())
 
-                st.success(f"✅ Entry saved! Detected emotions: **{', '.join([e.capitalize() for e in detected_emos])}**")
+            live_sent = round(max(-1, min(1, live_sent + mood_map[manual_mood] * 0.3)), 3)
 
-                st.markdown(f"""
-                <div style='background:#1c1c32;border:1px solid #2e2e50;border-radius:12px;padding:1.2rem;margin-top:1rem;'>
-                    <div style='color:#7878a0;font-size:0.72rem;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:0.8rem;'>Analysis Result</div>
-                    <div style='display:flex;gap:1.5rem;flex-wrap:wrap;'>
-                        <div><span style='color:#5a5a80;font-size:0.78rem;'>Primary Emotion</span><br>
-                             <span style='color:{EMOTION_COLORS.get(prim_emo,"#7c6af7")};font-weight:700;font-size:1.1rem;'>{prim_emo.capitalize()}</span></div>
-                        <div><span style='color:#5a5a80;font-size:0.78rem;'>Sentiment</span><br>
-                             <span style='color:#e8e8f0;font-weight:700;font-size:1.1rem;'>{sentiment:+.2f}</span></div>
-                        <div><span style='color:#5a5a80;font-size:0.78rem;'>Intensity</span><br>
-                             <span style='color:#e8e8f0;font-weight:700;font-size:1.1rem;'>{intensity:.1f}%</span></div>
-                        <div><span style='color:#5a5a80;font-size:0.78rem;'>Word Count</span><br>
-                             <span style='color:#e8e8f0;font-weight:700;font-size:1.1rem;'>{len(entry_text.split())}</span></div>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
+            prim_color    = EMOTION_COLORS.get(live_prim, '#7c6af7')
+            burnout_label = 'High' if live_intensity > 72 else 'Medium' if live_intensity > 50 else 'Low'
+            risk_color    = '#ff6b6b' if burnout_label == 'High' else '#ffd93d' if burnout_label == 'Medium' else '#6bcb77'
 
-                st.rerun()
+            # Primary emotion card
+            st.markdown(
+                f"<div class='card' style='--accent:{prim_color};margin-bottom:0.8rem;'>"
+                f"<div class='card-label'>Detected Primary Emotion</div>"
+                f"<div class='card-value' style='color:{prim_color};font-size:1.8rem;'>{live_prim.capitalize()}</div>"
+                f"<div class='card-sub'>{live_words} words &nbsp;&middot;&nbsp; "
+                f"Burnout risk: <b style='color:{risk_color};'>{burnout_label}</b></div>"
+                "</div>",
+                unsafe_allow_html=True
+            )
 
+            # Sentiment + intensity bars
+            st.markdown(sentiment_bar_html(live_sent), unsafe_allow_html=True)
+            st.markdown(intensity_bar_html(live_intensity), unsafe_allow_html=True)
+
+            # All detected emotion pills
+            pills_html = " ".join([
+                f"<span style='display:inline-block;padding:3px 11px;border-radius:20px;"
+                f"font-size:0.75rem;font-weight:600;margin:2px;"
+                f"background:{EMOTION_COLORS.get(e, '#7c6af7')}22;"
+                f"color:{EMOTION_COLORS.get(e, '#7c6af7')};"
+                f"border:1px solid {EMOTION_COLORS.get(e, '#7c6af7')}55;'>"
+                f"{e.capitalize()}</span>"
+                for e in live_emos
+            ])
+            st.markdown(
+                "<div style='margin:0.5rem 0;'>"
+                "<div style='font-size:0.72rem;color:#5a5a80;margin-bottom:5px;'>All emotions detected</div>"
+                f"{pills_html}</div>",
+                unsafe_allow_html=True
+            )
+
+            # Trigger keywords
+            if live_triggers:
+                st.markdown(
+                    "<div style='font-size:0.72rem;color:#5a5a80;margin:0.7rem 0 0.4rem;"
+                    "text-transform:uppercase;letter-spacing:0.1em;'>Trigger Keywords Found</div>",
+                    unsafe_allow_html=True
+                )
+                for emo, words in live_triggers.items():
+                    ec = EMOTION_COLORS.get(emo, '#7c6af7')
+                    chips = " ".join([
+                        f"<code style='background:{ec}18;color:{ec};border:1px solid {ec}33;"
+                        f"border-radius:5px;padding:1px 7px;font-size:0.72rem;'>{w}</code>"
+                        for w in words
+                    ])
+                    st.markdown(
+                        f"<div style='margin-bottom:5px;'>"
+                        f"<span style='color:{ec};font-size:0.75rem;font-weight:600;'>{emo.capitalize()}</span>"
+                        f" &nbsp;{chips}</div>",
+                        unsafe_allow_html=True
+                    )
+
+            # Contextual wellness tip
+            tips = {
+                'overwhelmed': "💡 You seem overwhelmed. Try the 4-7-8 breathing technique right now.",
+                'anxious':     "💡 Anxiety detected. Name 5 things you can see — it helps ground you.",
+                'sad':         "💡 It's okay to feel sad. Reach out to someone you trust today.",
+                'happy':       "💡 Great energy! Capture what made today good — it helps on harder days.",
+                'content':     "💡 Contentment is underrated. You're doing well — keep this balance.",
+                'neutral':     "💡 A neutral day is still a good day. What's one thing you're grateful for?",
+            }
+            tip = tips.get(live_prim, '')
+            if tip:
+                st.markdown(
+                    f"<div style='background:#1c1c32;border:1px solid #2e2e50;"
+                    f"border-left:3px solid {prim_color};border-radius:10px;"
+                    f"padding:0.8rem 1rem;margin-top:0.8rem;"
+                    f"font-size:0.82rem;color:#c8c8e0;line-height:1.6;'>{tip}</div>",
+                    unsafe_allow_html=True
+                )
+
+            # Mini sentiment gauge
+            gauge_fig = go.Figure(go.Indicator(
+                mode="gauge+number",
+                value=round((live_sent + 1) / 2 * 100, 1),
+                title=dict(text="Sentiment Score", font=dict(color='#c8c8e0', size=11)),
+                gauge=dict(
+                    axis=dict(range=[0, 100], tickcolor='#3a3a60',
+                              tickfont=dict(color='#5a5a80', size=9)),
+                    bar=dict(color='#6bcb77' if live_sent > 0.1 else '#ff6b6b' if live_sent < -0.1 else '#ffd93d'),
+                    bgcolor='#1c1c32', bordercolor='#2e2e50',
+                    steps=[
+                        dict(range=[0, 33],  color='#1a0f1a'),
+                        dict(range=[33, 66], color='#1a1a20'),
+                        dict(range=[66, 100], color='#0f1a0f'),
+                    ],
+                    threshold=dict(line=dict(color='#7c6af7', width=2), thickness=0.75, value=50),
+                ),
+                number=dict(font=dict(color='#e8e8f0', size=18), suffix="%"),
+            ))
+            gauge_fig.update_layout(
+                paper_bgcolor='rgba(0,0,0,0)', font=dict(family='DM Sans'),
+                height=180, margin=dict(l=20, r=20, t=30, b=10)
+            )
+            st.plotly_chart(gauge_fig, use_container_width=True, config={'displayModeBar': False})
+
+        else:
+            st.markdown(
+                "<div style='background:#1c1c32;border:1px dashed #2e2e50;border-radius:14px;"
+                "padding:2.5rem 1.5rem;text-align:center;margin-top:0.5rem;'>"
+                "<div style='font-size:2rem;margin-bottom:0.5rem;'>🧠</div>"
+                "<div style='color:#5a5a80;font-size:0.85rem;line-height:1.7;'>"
+                "Start typing in the journal box<br>and your emotion analysis<br>"
+                "will appear here instantly.</div></div>",
+                unsafe_allow_html=True
+            )
+
+    # ── Save logic ──
+    if save_btn:
+        if not entry_text.strip():
+            st.error("Please write something before saving.")
+        elif len(entry_text.strip()) < 10:
+            st.error("Entry is too short. Write at least a sentence.")
+        else:
+            detected_emos = detect_emotions(entry_text)
+            prim_emo      = primary_emotion(detected_emos)
+            sentiment_val = calculate_sentiment(entry_text)
+            intensity_val = calculate_intensity(entry_text, detected_emos)
+            mood_map2     = {'Very Low': -0.4, 'Low': -0.15, 'Neutral': 0.0, 'Good': 0.15, 'Excellent': 0.4}
+            sentiment_val = round(max(-1, min(1, sentiment_val + mood_map2[manual_mood] * 0.3)), 3)
+
+            new_entry = {
+                'date':                pd.Timestamp(entry_date),
+                'text':                entry_text.strip(),
+                'emotions':            detected_emos,
+                'primary_emotion':     prim_emo,
+                'sentiment_score':     sentiment_val,
+                'emotional_intensity': intensity_val,
+                'word_count':          len(entry_text.split()),
+                'mood_stability':      round(random.uniform(40, 95), 1),
+                'context':             writing_context,
+                'manual_mood':         manual_mood,
+            }
+            st.session_state.journal_entries.append(new_entry)
+            st.success(
+                f"Entry saved! Primary emotion: **{prim_emo.capitalize()}** "
+                f"· Sentiment: **{sentiment_val:+.2f}** · Intensity: **{intensity_val:.1f}%**"
+            )
+            st.rerun()
 
 # ━━━━━━━━━━━━━━━━━━━ VIEW: TRENDS & PREDICTIONS ━━━━━━━━━━━━━━━━━
 elif view == "Trends & Predictions":

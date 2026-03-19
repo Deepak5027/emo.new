@@ -860,10 +860,13 @@ elif view == "Entry History":
             sent      = entry['sentiment_score']
             sent_str  = f"+{sent:.2f}" if sent > 0 else f"{sent:.2f}"
             all_emos  = entry.get('emotions', [emo])
-            pills     = ''.join([
-                f"<span class='emotion-pill' style='background:{EMOTION_COLORS.get(e,\"#7c6af7\")}22;color:{EMOTION_COLORS.get(e,\"#7c6af7\")};border:1px solid {EMOTION_COLORS.get(e,\"#7c6af7\")}44;'>{e.capitalize()}</span>"
-                for e in all_emos
-            ])
+            def make_pill(e):
+                c = EMOTION_COLORS.get(e, '#7c6af7')
+                return (f"<span class='emotion-pill' style='"
+                        f"background:{c}22;color:{c};"
+                        f"border:1px solid {c}44;'>"
+                        f"{e.capitalize()}</span>")
+            pills = ''.join([make_pill(e) for e in all_emos])
             text_preview = entry['text'][:220] + ('…' if len(entry['text']) > 220 else '')
 
             st.markdown(f"""
